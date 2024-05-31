@@ -28,11 +28,37 @@
 ## CPU架构设计说明
 ### CPU特性
 #### ISA、寄存器、异常处理
-| 指令名 | 对应编码 | 使用方式 |
-|-------|---------|-----------|
-|add|
+| 指令名 | Opcode | funct3 | funct7 | 使用方式 |
+|-------|---------|-----------|-------|-------|
+|add|0110011|0x0|0x00|直接在instr_mem里访问即可|
+|sub|0110011|0x0|0x20|直接在instr_mem里访问即可|
+|or|0110011|0x6|0x00|直接在instr_mem里访问即可|
+|and|0110011|0x7|0x00|直接在instr_mem里访问即可|
+|sll|0110011|0x1|0x00|直接在instr_mem里访问即可|
+|srl|0110011|0x5|0x00|直接在instr_mem里访问即可|
+|addi|0010011|0x0|none|直接在instr_mem里访问即可|
+|ori|0010011|0x6|none|直接在instr_mem里访问即可|
+|andi|0010011|0x7|none|直接在instr_mem里访问即可|
+|slli|0010011|0x1|none|直接在instr_mem里访问即可|
+|srli|0010011|0x5|none|直接在instr_mem里访问即可|
+|lw|0000011|0x2|none|直接在instr_mem里访问即可；此外，对于接入外部input写入的，会将地址设置成-1或者-2。|
+|sw|0100011|0x2|none|直接在instr_mem里访问即可；此外，对于接入外部output输出的，会将地址设置成-1或者-2。|
+|beq|1100011|0x0|none|直接在instr_mem里访问即可|
+|bne|1100011|0x1|none|直接在instr_mem里访问即可|
+|blt|1100011|0x4|none|直接在instr_mem里访问即可|
+|bge|1100011|0x5|none|直接在instr_mem里访问即可|
+|bltu|1100011|0x6|none|直接在instr_mem里访问即可|
+|bgeu|1100011|0x7|none|直接在instr_mem里访问即可|
+|jal|1101111|none|none|直接在instr_mem里访问即可|
+|jalr|1100111|0x0|none|直接在instr_mem里访问即可|
+|lui|0110111|none|none|直接在instr_mem里访问即可|
+|auipc|0110111|none|none|直接在instr_mem里访问即可|
 
-寄存器位宽32bits，数目32个，其中x0寄存器始终为0
+参考的ISA：RISC-V
+
+一些更新优化：由于正常RISC-V指令外部输入输出需要用到ecall操作，因此本项目中我们采用特定的内存地址来表示IO读写
+
+寄存器位宽32bits，数目32个，其中x0寄存器始终为0	
 
 异常处理：输入数据错误时，通过一个循环之后可以重新输入
 #### CPU时钟、CPI、周期
@@ -300,6 +326,12 @@ blue (4位)：蓝色信号。
 
 ## 问题及总结
 
+在本次项目中，我们组遇到的最大问题还是在于时序方面的处理。由于外部读入和输出，我们均采用中断式的形式，因此我们需要对每个时序模块新增一个锁，来确保按下确认键之前所有模块均不会工作。此外，还有由于本次项目涉及的模块接线口较多，我们在接线过程中也出现了不少接线错误以及两个连接端口位宽不匹配的问题。
+
+通过这次项目，我们组均对CPU的结构有了更加深刻的理解和认知，也提升了编写代码和debug能力。
+
+**（总结要不再多水点，我编不下去了）**
+
 # bonus相关部分
 ## VGA实现
 ### 设计思路及与周边模块的关系
@@ -309,4 +341,66 @@ blue (4位)：蓝色信号。
 ## auipc及lui指令实现
 ### 设计思路及与周边模块的关系
 
+auipc和lui本身也是一种写入寄存器值得指令，因此在实际操作中，我们组采用了类似R-type的指令模式：在ALU模块新增input口连接PC，同时在Controller模块新增auipc和lui的输出口表示当前操作信号是否为这两个；此外ALU模块内部也新增了有关auipc和lui的运算部分。
+
 ### 核心代码及必要说明
+
+```verilog
+//Controller 新增部分
+if(instruction[6:0]==LUI)lui=1'b1;
+else lui=1'b0;
+    
+if(instruction[6:0]==AUIPC)auiPC=1'b1;
+else auiPC=1'b0;
+
+//ALU 含修改处的部分代码
+case(ALUSrc)
+        1'b0:case(ALU_control)
+             4'b0010:ALUResult = ReadData1 + ReadData2;
+             4'b0110:ALUResult = ReadData1 - ReadData2;
+             4'b0000:ALUResult = ReadData1 & ReadData2;
+             4'b0001:ALUResult = ReadData1 | ReadData2;
+             4'b1000:ALUResult = ReadData1 << ReadData2;
+             4'b1001:ALUResult = ReadData1 >> ReadData2;
+        endcase
+            1'b1:begin
+                //下面两行新增了对lui和auipc指令的特殊处理
+                if(lui==1'b1)ALUResult=imm32;
+                else if(auiPC==1'b1)ALUResult=CurrentPC+imm32;
+                else begin
+                    case(ALU_control)
+                        4'b0010:ALUResult = ReadData1 + imm32;
+                        4'b0110:ALUResult = ReadData1 - imm32;
+                        4'b0000:ALUResult = ReadData1 & imm32;
+                        4'b0001:ALUResult = ReadData1 | imm32;
+                        4'b1000:ALUResult = ReadData1 << imm32;
+                        4'b1001:ALUResult = ReadData1 >> imm32;
+                    endcase
+                end
+            end
+       endcase
+```
+
+## bouns测试用例
+
+由于VGA模块是直接对应8位数码管的，在实际跑基本测试场景1和2就可以获得其显示结果，故我们组并没有针对VGA来单独编写测试用例。
+
+对于auipc和lui这部分，我们组编写了简单的测试场景：
+
+```
+#LUI AND AUIPC
+Case:
+lui s10 0x000ABCDE
+sw s10 -1(zero)
+auipc s10 0x000ABCDE
+sw s10 -1(zero)
+beq zero zero Case
+```
+
+在上板测试中，我们分别得到结果 `ABCDE000`和 `ABCDE008`，与预期结果一致。
+
+## 问题与总结
+
+**（VGA部分也补充一些）**
+
+在于实现lui和auipc指令中，由于PCFetcher中的PC值并不是在下个周期开始才发生改变，针对此问题，我们额外开了一个`reg`来储存当前PC值。解决了此问题后，auipc和lui的指令基本达成了预期正常运行的结果。
